@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick Addition</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#1f2a24">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  :root { --bg:#f6f1e9; --ink:#1f2a24; --muted:#6b726c; --ok:#2e7d4f; --bad:#c0392b; --card:#fffdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--ink); font-family:system-ui, sans-serif; }
+  .card { background:var(--card); width:min(520px, 92vw); padding:32px 28px; border-radius:18px;
+          box-shadow:0 10px 30px #0001; text-align:center; }
+  h1 { margin:0 0 6px; font-size:26px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .bar { display:flex; justify-content:space-between; font-size:18px; margin-bottom:18px; }
+  .problem { font-size:64px; font-weight:700; letter-spacing:2px; margin:18px 0; font-variant-numeric:tabular-nums; }
+  .tier { font-size:13px; color:var(--muted); height:16px; }
+  input { font-size:36px; width:180px; text-align:center; padding:8px; border-radius:12px;
+          border:2px solid #d8d2c6; outline:none; font-variant-numeric:tabular-nums; }
+  input:focus { border-color:var(--ink); }
+  .flash-ok { border-color:var(--ok) !important; }
+  .flash-bad { border-color:var(--bad) !important; }
+  .feedback { height:24px; margin-top:10px; font-size:16px; }
+  button { font-size:18px; padding:10px 22px; border-radius:12px; border:0; background:var(--ink);
+           color:#fff; cursor:pointer; margin:6px; }
+  button.ghost { background:transparent; color:var(--ink); border:2px solid var(--ink); }
+  table { margin:16px auto 6px; border-collapse:collapse; font-size:15px; }
+  td, th { padding:4px 12px; text-align:left; }
+  th { color:var(--muted); font-weight:600; }
+  .hidden { display:none; }
+  .timebar { height:6px; background:#e8e2d6; border-radius:3px; overflow:hidden; margin-bottom:14px; }
+  .timebar > div { height:100%; background:var(--ink); width:100%; transition:width .25s linear; }
+</style>
+</head>
+<body>
+<div class="card">
+  <section id="start">
+    <h1>Quick Addition</h1>
+    <p class="muted">Answer as many as you can before time runs out.<br>
+      Problems rotate evenly from easy to hard. The hard ones need carrying, like 18 + 17.</p>
+    <p class="muted">Time:</p>
+    <div>
+      <button class="ghost" data-time="30">30 s</button>
+      <button data-time="60">60 s</button>
+      <button class="ghost" data-time="120">2 min</button>
+    </div>
+  </section>
+
+  <section id="play" class="hidden">
+    <div class="timebar"><div id="timefill"></div></div>
+    <div class="bar"><span>Time: <b id="time">60</b>s</span><span>Correct: <b id="score">0</b></span></div>
+    <div class="tier" id="tier"></div>
+    <div class="problem" id="problem">0 + 0</div>
+    <input id="answer" inputmode="numeric" autocomplete="off" aria-label="Your answer">
+    <div class="feedback" id="feedback"></div>
+    <p class="muted">Type the answer and press Enter.</p>
+  </section>
+
+  <section id="end" class="hidden">
+    <h1>Time's up</h1>
+    <p style="font-size:22px">You got <b id="final">0</b> right out of <b id="attempted">0</b>.</p>
+    <table id="breakdown"></table>
+    <button id="again">Play again</button>
+  </section>
+</div>
+
+<script>
+// Difficulty tiers. Carrying is what makes a sum hard, so tiers go from no carry
+// with small numbers up to two-digit sums that carry in both columns.
+const TIERS = [
+  { name: "Easy",        gen: () => noCarry2x1() },   // 23 + 5
+  { name: "Medium",      gen: () => carry1x1() },     // 8 + 7
+  { name: "Medium",      gen: () => noCarry2x2() },   // 21 + 34
+  { name: "Hard",        gen: () => carry2x1() },     // 27 + 8
+  { name: "Hard",        gen: () => carry2x2Ones() }, // 18 + 17
+  { name: "Hardest",     gen: () => carry2x2Both() }, // 58 + 67
+];
+const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+function noCarry1x1() { const a = rnd(1, 8); return [a, rnd(1, 9 - a)]; }
+function carry1x1()   { const a = rnd(2, 9); return [a, rnd(10 - a, 9)]; }
+function noCarry2x1() { const t = rnd(1, 9), o = rnd(0, 8); return [10 * t + o, rnd(1, 9 - o)]; }
+function carry2x1()   { const t = rnd(1, 8), o = rnd(2, 9); return [10 * t + o, rnd(10 - o, 9)]; }
+function noCarry2x2() {
+  const t1 = rnd(1, 8), o1 = rnd(0, 8);
+  return [10 * t1 + o1, 10 * rnd(1, 9 - t1) + rnd(0, 9 - o1)];
+}
+function carry2x2Ones() { // ones column carries, tens column does not (sum < 100)
+  const o1 = rnd(2, 9), o2 = rnd(10 - o1, 9);
+  const t1 = rnd(1, 7), t2 = rnd(1, 8 - t1);
+  return [10 * t1 + o1, 10 * t2 + o2];
+}
+function carry2x2Both() { // both columns carry: result is three digits
+  const o1 = rnd(2, 9), o2 = rnd(10 - o1, 9);
+  const t1 = rnd(2, 9), t2 = rnd(Math.max(1, 9 - t1), 9);
+  return [10 * t1 + o1, 10 * t2 + o2];
+}
+
+// Random draws from an even distribution over the tiers, with a soft correction:
+// if the last few problems ran harder (or easier) than average, the odds lean
+// back the other way, so an unlucky streak doesn't stay unlucky.
+const RECENT = 5;          // how many past problems the correction looks at
+const PULL = 1.2;          // how strongly it leans back (0 = pure random)
+let recent = [];
+function nextTier() {
+  const n = TIERS.length, mid = (n - 1) / 2;
+  const drift = recent.length ? recent.reduce((s, t) => s + t, 0) / recent.length - mid : 0;
+  const w = TIERS.map((_, i) => Math.exp(-PULL * (drift / mid) * ((i - mid) / mid)));
+  let r = Math.random() * w.reduce((s, x) => s + x, 0), t = 0;
+  while (r >= w[t]) r -= w[t++];
+  recent.push(t); if (recent.length > RECENT) recent.shift();
+  return t;
+}
+
+const $ = id => document.getElementById(id);
+let total = 60, left = 60, timer = null, current = null, score = 0, stats = [];
+
+function newProblem() {
+  const t = nextTier();
+  let [a, b] = TIERS[t].gen();
+  if (Math.random() < 0.5) [a, b] = [b, a];
+  current = { a, b, t };
+  $("problem").textContent = `${a} + ${b}`;
+  $("tier").textContent = TIERS[t].name;
+  $("answer").value = "";
+  $("answer").focus();
+}
+
+function start(seconds) {
+  total = left = seconds; score = 0; recent = [];
+  stats = TIERS.map(() => ({ right: 0, tried: 0 }));
+  $("score").textContent = 0; $("time").textContent = left; $("feedback").textContent = "";
+  $("timefill").style.width = "100%";
+  show("play"); newProblem();
+  clearInterval(timer);
+  timer = setInterval(() => {
+    left--; $("time").textContent = left;
+    $("timefill").style.width = (100 * left / total) + "%";
+    if (left <= 0) finish();
+  }, 1000);
+}
+
+function submit() {
+  const raw = $("answer").value.trim();
+  if (raw === "" || !current) return;
+  const ok = Number(raw) === current.a + current.b;
+  const s = stats[current.t]; s.tried++;
+  const input = $("answer");
+  input.classList.remove("flash-ok", "flash-bad");
+  if (ok) { score++; s.right++; $("score").textContent = score; $("feedback").textContent = ""; input.classList.add("flash-ok"); }
+  else { $("feedback").innerHTML = `<span style="color:var(--bad)">${current.a} + ${current.b} = ${current.a + current.b}</span>`; input.classList.add("flash-bad"); }
+  setTimeout(() => input.classList.remove("flash-ok", "flash-bad"), 250);
+  newProblem();
+}
+
+function finish() {
+  clearInterval(timer); current = null;
+  const tried = stats.reduce((n, s) => n + s.tried, 0);
+  $("final").textContent = score; $("attempted").textContent = tried;
+  // merge tiers that share a label for the summary
+  const by = {};
+  TIERS.forEach((t, i) => { by[t.name] = by[t.name] || { right: 0, tried: 0 }; by[t.name].right += stats[i].right; by[t.name].tried += stats[i].tried; });
+  $("breakdown").innerHTML = "<tr><th>Level</th><th>Right</th><th>Tried</th></tr>" +
+    Object.entries(by).map(([k, v]) => `<tr><td>${k}</td><td>${v.right}</td><td>${v.tried}</td></tr>`).join("");
+  show("end");
+}
+
+function show(id) { ["start", "play", "end"].forEach(s => $(s).classList.toggle("hidden", s !== id)); }
+
+document.querySelectorAll("[data-time]").forEach(b => b.onclick = () => start(Number(b.dataset.time)));
+$("again").onclick = () => show("start");
+$("answer").addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+</script>
+</body>
+</html>
