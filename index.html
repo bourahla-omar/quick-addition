@@ -48,6 +48,13 @@
   ul.pairs { list-style:none; padding:0; margin:6px 0; font-size:15px; }
   ul.pairs li { padding:3px 0; }
   ul.pairs b { font-variant-numeric:tabular-nums; margin-right:8px; }
+  .pbline { font-size:13px; color:var(--muted); height:16px; margin:-10px 0 8px; }
+  .pbline.ok { color:var(--ok); font-weight:600; }
+  .celebrate { background:#fff3c4; border-radius:14px; padding:12px 14px; margin:6px 0 12px; font-size:16px;
+               animation:pop .5s ease-out; }
+  .celebrate b { display:block; font-size:22px; margin-bottom:4px; }
+  .celebrate div { padding:2px 0; }
+  @keyframes pop { 0% { transform:scale(.6); opacity:0 } 70% { transform:scale(1.08) } 100% { transform:scale(1); opacity:1 } }
 </style>
 </head>
 <body>
@@ -60,6 +67,7 @@
       <button class="ghost" data-mode="single">Single digits</button>
     </div>
     <p class="muted" id="modeinfo"></p>
+    <p class="muted" id="startpb"></p>
     <p class="muted">Time:</p>
     <div>
       <button class="ghost" data-time="30">30 s</button>
@@ -72,6 +80,7 @@
   <section id="play" class="hidden">
     <div class="timebar"><div id="timefill"></div></div>
     <div class="bar"><span>Time: <b id="time">60</b>s</span><span>Correct: <b id="score">0</b></span></div>
+    <div class="pbline" id="pb"></div>
     <div class="tier" id="tier"></div>
     <div class="problem" id="problem">0 + 0</div>
     <input id="answer" inputmode="numeric" autocomplete="off" aria-label="Your answer">
@@ -82,6 +91,7 @@
   <section id="end" class="hidden">
     <h1>Time's up</h1>
     <p style="font-size:22px">You got <b id="final">0</b> right out of <b id="attempted">0</b>.</p>
+    <div id="celebrate"></div>
     <p class="muted" id="endnote"></p>
     <table id="breakdown"></table>
     <button id="again">Play again</button>
@@ -192,19 +202,46 @@ function pickPair(pairs) {
 // ---------- Progress, saved on this device only ----------
 const STORE = "quickAddition.progress.v1";
 const MAX_MS = 15000;   // slower answers count as 15 s, so a pause doesn't wreck the averages
+const MIN_FOR_PB = 5;   // speed and accuracy bests need at least this many answers in the round
 const pairKey = (a, b) => Math.min(a, b) + "+" + Math.max(a, b);
+const lenLabel = s => s < 120 ? s + " s" : (s / 60) + " min";
+const fmtS = ms => (ms / 1000).toFixed(1) + " s";
 let progress = loadProgress();
 
 function loadProgress() {
   try {
     const p = JSON.parse(localStorage.getItem(STORE));
-    if (p && p.v === 1 && p.modes) return p;
+    if (p && p.v === 1 && p.modes) {
+      // bests came later: derive them from rounds saved by an older version
+      Object.values(p.modes).forEach(m => {
+        if (m.best) return;
+        m.best = {};
+        (m.sessions || []).forEach(s => updateBests(m, s.secs, s.right, s.tried, s.ms, s.at));
+      });
+      return p;
+    }
   } catch (e) {}
   return { v: 1, modes: {} };
 }
+// Personal bests per round length: best score, fastest time per answer and
+// best accuracy, each with the date it was set. Returns what improved.
+function updateBests(m, secs, right, tried, msPer, at) {
+  const cur = m.best[secs] || (m.best[secs] = {}), gained = {};
+  const beat = (key, v, better) => {
+    if (cur[key] && !better(v, cur[key].v)) return;
+    gained[key] = { old: cur[key] ? cur[key].v : null, v };
+    cur[key] = { v, at };
+  };
+  beat("score", right, (a, b) => a > b);
+  if (tried >= MIN_FOR_PB) {
+    beat("ms", Math.round(msPer), (a, b) => a < b);
+    beat("acc", Math.round(100 * right / tried), (a, b) => a > b);
+  }
+  return gained;
+}
 function saveProgress() { try { localStorage.setItem(STORE, JSON.stringify(progress)); } catch (e) {} }
 function modeProgress(id) {
-  return progress.modes[id] || (progress.modes[id] = { answers: 0, right: 0, ms: 0, sessions: [], pairs: {} });
+  return progress.modes[id] || (progress.modes[id] = { answers: 0, right: 0, ms: 0, sessions: [], pairs: {}, best: {} });
 }
 function recordAnswer(a, b, ok, ms) {
   const m = modeProgress(mode), k = pairKey(a, b);
@@ -241,6 +278,23 @@ function setMode(id) {
   $("modeinfo").textContent = MODES[id].info;
   $("hint").textContent = MODES[id].hint;
   progress.lastMode = id; saveProgress();
+  renderStartPB();
+}
+function renderStartPB() {
+  const b = modeProgress(mode).best;
+  const parts = Object.keys(b).map(Number).sort((x, y) => x - y).filter(s => b[s].score).map(s => `${b[s].score.v} in ${lenLabel(s)}`);
+  $("startpb").textContent = parts.length ? "\u{1F3C6} Your best: " + parts.join(" \u00b7 ") : "No personal best yet. Play a round to set one!";
+}
+// During a round: the personal best for this length, and the score the
+// player is on track for at the current pace.
+function updatePace() {
+  const pb = (modeProgress(mode).best[total] || {}).score, el = $("pb");
+  if (!pb) { el.textContent = ""; el.className = "pbline"; return; }
+  const elapsed = total - left;
+  let text = `\u{1F3C6} PB ${pb.v}`, ahead = false;
+  if (elapsed >= 5 && score > 0) { const pace = Math.round(score * total / elapsed); text += ` \u00b7 on track for ${pace}`; ahead = pace > pb.v; }
+  if (score > pb.v) { text = `\u{1F3C6} New PB! ${score}`; ahead = true; }
+  el.textContent = text; el.className = "pbline" + (ahead ? " ok" : "");
 }
 
 function newProblem() {
@@ -260,12 +314,12 @@ function start(seconds) {
   stats = MODES[mode].tiers.map(() => ({ right: 0, tried: 0 }));
   $("score").textContent = 0; $("time").textContent = left; $("feedback").textContent = "";
   $("timefill").style.width = "100%";
-  show("play"); newProblem();
+  show("play"); newProblem(); updatePace();
   clearInterval(timer);
   timer = setInterval(() => {
     left--; $("time").textContent = left;
     $("timefill").style.width = (100 * left / total) + "%";
-    if (left <= 0) finish();
+    if (left <= 0) finish(); else updatePace();
   }, 1000);
 }
 
@@ -289,7 +343,7 @@ function submit() {
     $("feedback").innerHTML = `<span class="bad">${full}</span>`; input.classList.add("flash-bad");
   }
   setTimeout(() => input.classList.remove("flash-ok", "flash-bad"), 250);
-  newProblem();
+  newProblem(); updatePace();
 }
 
 function finish() {
@@ -297,13 +351,21 @@ function finish() {
   const tiers = MODES[mode].tiers;
   const tried = stats.reduce((n, s) => n + s.tried, 0);
   $("final").textContent = score; $("attempted").textContent = tried;
-  let note = "";
+  let note = "", box = "";
   if (tried) {
-    const best = modeProgress(mode).sessions.filter(s => s.secs === total).reduce((b, s) => Math.max(b, s.right), 0);
-    note = `${MODES[mode].name}, ${(roundMs / tried / 1000).toFixed(1)} s per answer.`;
-    if (best) note += score > best ? " New best!" : ` Best so far: ${best}.`;
+    const m = modeProgress(mode), msPer = roundMs / tried;
+    const gained = updateBests(m, total, score, tried, msPer, Date.now());
     recordSession(tried, score, roundMs);
+    note = `${MODES[mode].name}, ${lenLabel(total)}: ${fmtS(msPer)} per answer, ${Math.round(100 * score / tried)}% right.`;
+    const was = (g, f) => g.old === null ? "" : ` (was ${f(g.old)})`;
+    const lines = [];
+    if (gained.score) lines.push(`<b>\u{1F3C6} New personal best!</b>` + (gained.score.old === null ? `Your first score: ${score}` : `Was ${gained.score.old}, now ${score}`));
+    if (gained.ms) lines.push(`\u26A1 Fastest yet: ${fmtS(gained.ms.v)} per answer${was(gained.ms, fmtS)}`);
+    if (gained.acc) lines.push(`\u{1F3AF} Best accuracy: ${gained.acc.v}%${was(gained.acc, v => v + "%")}`);
+    if (lines.length) box = `<div class="celebrate">${lines.map(l => `<div>${l}</div>`).join("")}</div>`;
+    else note += ` Personal best: ${m.best[total].score.v}.`;
   }
+  $("celebrate").innerHTML = box;
   $("endnote").textContent = note;
   // merge tiers that share a label for the summary
   const by = {};
@@ -320,7 +382,7 @@ function renderProgress(id) {
   document.querySelectorAll("[data-ptab]").forEach(b => b.classList.toggle("on", b.dataset.ptab === id));
   const m = progress.modes[id];
   if (!m || !m.answers) { $("pbody").innerHTML = `<p class="muted">No ${MODES[id].name} rounds played yet.</p>`; return; }
-  const secs = ms => (ms / 1000).toFixed(1) + " s";
+  const secs = fmtS;
   const S = m.sessions, avgOf = list => list.length ? list.reduce((s, x) => s + x.ms, 0) / list.length : 0;
   let speed = `<p class="muted">Speed: ${secs(m.ms / m.answers)} per answer overall.`;
   if (S.length >= 6) speed += ` Last three rounds ${secs(avgOf(S.slice(-3)))}, first three rounds ${secs(avgOf(S.slice(0, 3)))}.`;
@@ -335,6 +397,12 @@ function renderProgress(id) {
     const p = m.pairs[k];
     return `<li><b>${k.replace("+", " + ")}</b><span class="muted">wrong ${p.w} of ${p.n}, ${secs(p.ms / p.n)}</span></li>`;
   }).join("") + "</ul>" : "<p class=\"muted\">Nothing stands out yet. Keep playing.</p>";
+  const B = m.best || {}, lens = Object.keys(B).map(Number).sort((x, y) => x - y).filter(s => B[s].score);
+  const date = at => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const cell = (b, f) => b ? `${f(b.v)}<br><span class="muted">${date(b.at)}</span>` : "-";
+  const bests = lens.length ? "<table><tr><th>Length</th><th>Score</th><th>Fastest</th><th>Accuracy</th></tr>" + lens.map(s =>
+    `<tr><td>${lenLabel(s)}</td><td>${cell(B[s].score, v => v)}</td><td>${cell(B[s].ms, fmtS)}</td><td>${cell(B[s].acc, v => v + "%")}</td></tr>`).join("") + "</table>"
+    : "<p class=\"muted\">None yet.</p>";
   $("pbody").innerHTML =
     `<div class="stats">
        <div><b>${m.answers}</b><span>answers</span></div>
@@ -342,13 +410,17 @@ function renderProgress(id) {
        <div><b>${secs(m.ms / m.answers)}</b><span>per answer</span></div>
        <div><b>${S.length}</b><span>rounds</span></div>
      </div>` + speed +
+    "<h2>\u{1F3C6} Personal bests</h2>" + bests +
     "<h2>Recent rounds</h2><table><tr><th>When</th><th>Length</th><th>Right</th><th>Speed</th></tr>" + rounds + "</table>" +
     "<h2>Needs work</h2>" + pairs +
     (id === "single" && hard.length ? "<p class=\"muted\">These come up more often in Single digits.</p>" : "");
 }
 function openProgress() { renderProgress(mode); show("progress"); }
 
-function show(id) { ["start", "play", "end", "progress"].forEach(s => $(s).classList.toggle("hidden", s !== id)); }
+function show(id) {
+  ["start", "play", "end", "progress"].forEach(s => $(s).classList.toggle("hidden", s !== id));
+  if (id === "start") renderStartPB();
+}
 
 document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => setMode(b.dataset.mode));
 document.querySelectorAll("[data-time]").forEach(b => b.onclick = () => start(Number(b.dataset.time)));
